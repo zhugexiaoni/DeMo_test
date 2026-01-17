@@ -1,5 +1,7 @@
 import torchvision.transforms as T
 from torch.utils.data import DataLoader
+import torch
+import numpy as np
 
 from .bases import ImageDataset
 from .sampler import RandomIdentitySampler
@@ -163,6 +165,15 @@ def train_collate_fn(batch):
     return imgs, pids, camids, viewids,_
 
 
+def worker_init_fn(worker_id):
+    """
+    DataLoader worker初始化函数，确保每个worker使用确定性的随机种子
+    """
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
+
+
 def val_collate_fn(batch):
     imgs, pids, camids, viewids, img_paths = zip(*batch)
     viewids = torch.tensor(viewids, dtype=torch.int64)
@@ -211,6 +222,10 @@ def make_dataloader(cfg):
     cam_num = dataset.num_train_cams
     view_num = dataset.num_train_vids
 
+    # 创建固定的随机数生成器以确保可重复性
+    g = torch.Generator()
+    g.manual_seed(cfg.SOLVER.SEED)
+
     if 'triplet' in cfg.DATALOADER.SAMPLER:
         if cfg.MODEL.DIST_TRAIN:
             print('DIST_TRAIN START')
@@ -224,18 +239,24 @@ def make_dataloader(cfg):
                 batch_sampler=batch_sampler,
                 collate_fn=train_collate_fn,
                 pin_memory=True,
+                worker_init_fn=worker_init_fn,
+                generator=g
             )
         else:
             train_loader = DataLoader(
                 train_set, batch_size=cfg.SOLVER.IMS_PER_BATCH,
                 sampler=RandomIdentitySampler(dataset.train, cfg.SOLVER.IMS_PER_BATCH, cfg.DATALOADER.NUM_INSTANCE),
                 num_workers=num_workers, collate_fn=train_collate_fn,
+                worker_init_fn=worker_init_fn,
+                generator=g
             )
     elif cfg.DATALOADER.SAMPLER == 'softmax':
         print('using softmax sampler')
         train_loader = DataLoader(
             train_set, batch_size=cfg.SOLVER.IMS_PER_BATCH, num_workers=num_workers,
-            collate_fn=train_collate_fn
+            collate_fn=train_collate_fn,
+            worker_init_fn=worker_init_fn,
+            generator=g
         )
     else:
         print('unsupported sampler! expected softmax or triplet but got {}'.format(cfg.SAMPLER))
@@ -250,10 +271,14 @@ def make_dataloader(cfg):
 
     val_loader = DataLoader(
         val_set, batch_size=cfg.TEST.IMS_PER_BATCH, shuffle=False, num_workers=num_workers,
-        collate_fn=val_collate_fn
+        collate_fn=val_collate_fn,
+        worker_init_fn=worker_init_fn,
+        generator=g
     )
     train_loader_normal = DataLoader(
         train_set_normal, batch_size=cfg.TEST.IMS_PER_BATCH, shuffle=False, num_workers=num_workers,
-        collate_fn=val_collate_fn
+        collate_fn=val_collate_fn,
+        worker_init_fn=worker_init_fn,
+        generator=g
     )
     return train_loader, train_loader_normal, val_loader, len(dataset.query), num_classes, cam_num, view_num

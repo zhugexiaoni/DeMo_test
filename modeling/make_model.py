@@ -126,14 +126,36 @@ class DeMo(nn.Module):
                 RGB_ori_score = self.classifier_r(self.bottleneck_r(RGB_global))
                 NI_ori_score = self.classifier_n(self.bottleneck_n(NI_global))
                 TI_ori_score = self.classifier_t(self.bottleneck_t(TI_global))
+            
+            # --- Modified for IADD Plugin ---
             if self.direct:
                 if self.HDM or self.ATM:
-                    return moe_score, moe_feat, ori_score, ori, loss_moe
-                return ori_score, ori
+                    return {
+                        'moe_score': moe_score, 
+                        'moe_feat': moe_feat, 
+                        'ori_score': ori_score, 
+                        'ori_feat': ori, 
+                        'loss_moe': loss_moe,
+                        # IADD 需要的中间特征
+                        'feats_dict': {'RGB': RGB_global, 'NI': NI_global, 'TI': TI_global}
+                    }
+                return {
+                    'ori_score': ori_score, 
+                    'ori_feat': ori,
+                    'feats_dict': {'RGB': RGB_global, 'NI': NI_global, 'TI': TI_global}
+                }
             else:
                 if self.HDM or self.ATM:
-                    return moe_score, moe_feat, RGB_ori_score, RGB_global, NI_ori_score, NI_global, TI_ori_score, TI_global, loss_moe
-                return RGB_ori_score, RGB_global, NI_ori_score, NI_global, TI_ori_score, TI_global
+                    return {
+                        'moe_score': moe_score, 'moe_feat': moe_feat, 'loss_moe': loss_moe,
+                        'logits_dict': {'RGB': RGB_ori_score, 'NI': NI_ori_score, 'TI': TI_ori_score},
+                        'feats_dict': {'RGB': RGB_global, 'NI': NI_global, 'TI': TI_global}
+                    }
+                return {
+                    'logits_dict': {'RGB': RGB_ori_score, 'NI': NI_ori_score, 'TI': TI_ori_score},
+                    'feats_dict': {'RGB': RGB_global, 'NI': NI_global, 'TI': TI_global}
+                }
+            # -------------------------------
 
         else:
             RGB = x['RGB']

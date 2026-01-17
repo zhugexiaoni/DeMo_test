@@ -47,6 +47,16 @@ _C.MODEL.STRIDE_SIZE = [16, 16]
 _C.MODEL.GLOBAL_LOCAL = False # Whether to use the local information in PIFE for DeMo
 _C.MODEL.HEAD = 12 # Number of heads in the ATMoE
 
+# DMCG (Dynamic Modality Coordination Gating) Parameters
+_C.MODEL.DMCG = CN()
+_C.MODEL.DMCG.ENABLED = False  # Whether to use DMCG
+_C.MODEL.DMCG.WARMUP_EPOCHS = 20  # Number of warmup epochs before DMCG activation
+_C.MODEL.DMCG.HIDDEN_DIM = 128  # Hidden dimension for gate networks
+_C.MODEL.DMCG.LAMBDA_GATE = 0.1  # Weight for gate regularization loss
+_C.MODEL.DMCG.LAMBDA_BALANCE = 0.05  # Weight for balance promotion loss
+_C.MODEL.DMCG.BETA = [0.25, 0.25, 0.25, 0.25]  # MIEI component weights [feature_entropy, info_gain, correctness, uniqueness]
+_C.MODEL.DMCG.ALPHA = 1.0  # MIEI correctness penalty coefficient
+
 # SIE Parameter
 _C.MODEL.SIE_COE = 3.0
 _C.MODEL.SIE_CAMERA = True
@@ -173,3 +183,13 @@ _C.TEST.MISS = 'None'
 # ---------------------------------------------------------------------------- #
 # Path to checkpoint and saved log of trained model
 _C.OUTPUT_DIR = "./test"
+
+# ---------------------------------------------------------------------------- #
+# IADD Options (Instance-Aware Dynamic Distillation)
+# ---------------------------------------------------------------------------- #
+_C.MODEL.IADD = CN()
+_C.MODEL.IADD.ENABLED = False
+_C.MODEL.IADD.TEMPERATURE = 2.0  # Sigmoid 温度
+_C.MODEL.IADD.HARD_NEG_K = 10    # MCD 计算用的 Top-K
+_C.MODEL.IADD.LAMBDA_DISTILL = 0.5  # 蒸馏 Loss 权重
+_C.MODEL.IADD.LAMBDA_HYBRID = 1.0   # 混合 Triplet Loss 权重
