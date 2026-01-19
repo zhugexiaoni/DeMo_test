@@ -1,3 +1,4 @@
 **/output/
 **/checkpoints
 /data/RGBNT201
+**/__pycache__
