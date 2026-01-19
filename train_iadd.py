@@ -6,9 +6,9 @@ Based on train_net.py
 from utils.logger import setup_logger
 from data import make_dataloader
 from modeling import make_model
-from solver import make_optimizer
+from solver.make_optimizer import make_optimizer
 from solver.scheduler_factory import create_scheduler
-from layers import make_loss
+from layers.make_loss import make_loss
 from engine.processor_iadd import do_train_iadd
 import random
 import torch
@@ -70,7 +70,7 @@ def main():
     if cfg.MODEL.DIST_TRAIN:
         torch.distributed.init_process_group(backend='nccl', init_method='env://')
 
-    train_loader, val_loader, num_query, num_classes, camera_num, view_num = make_dataloader(cfg)
+    train_loader, _, val_loader, num_query, num_classes, camera_num, view_num = make_dataloader(cfg)
 
     model = make_model(cfg, num_classes, camera_num, view_num)
 

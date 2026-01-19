@@ -62,7 +62,7 @@ class RGBNT201(BaseImageDataset):
         img_paths_RGB = glob.glob(osp.join(dir_path, 'RGB', '*.jpg'))
         pid_container = set()
         for img_path_RGB in img_paths_RGB:
-            jpg_name = img_path_RGB.split('/')[-1]
+            jpg_name = osp.basename(img_path_RGB)
             pid = int(jpg_name.split('_')[0][0:6])
             pid_container.add(pid)
         pid2label = {pid: label for label, pid in enumerate(pid_container)}
@@ -70,7 +70,7 @@ class RGBNT201(BaseImageDataset):
         data = []
         for img_path_RGB in img_paths_RGB:
             img = []
-            jpg_name = img_path_RGB.split('/')[-1]
+            jpg_name = osp.basename(img_path_RGB)
             img_path_NI = osp.join(dir_path, 'NI', jpg_name)
             img_path_TI = osp.join(dir_path, 'TI', jpg_name)
             img.append(img_path_RGB)

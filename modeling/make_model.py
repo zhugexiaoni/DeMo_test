@@ -56,6 +56,27 @@ class DeMo(nn.Module):
             self.bottleneck = nn.BatchNorm1d(3 * self.feat_dim)
             self.bottleneck.bias.requires_grad_(False)
             self.bottleneck.apply(weights_init_kaiming)
+
+            # DIRECT=1 时也需要为每个模态提供“独立 logits”，以符合 IADD 的设计理念
+            # 说明：ori_score 是三模态拼接后的融合分类分数；而 IADD 需要 RGB/NI/TI 各自的分类分数
+            # 用于计算模态置信度差异（MCD）与动态蒸馏权重。
+            self.classifier_r = nn.Linear(self.feat_dim, self.num_classes, bias=False)
+            self.classifier_r.apply(weights_init_classifier)
+            self.bottleneck_r = nn.BatchNorm1d(self.feat_dim)
+            self.bottleneck_r.bias.requires_grad_(False)
+            self.bottleneck_r.apply(weights_init_kaiming)
+
+            self.classifier_n = nn.Linear(self.feat_dim, self.num_classes, bias=False)
+            self.classifier_n.apply(weights_init_classifier)
+            self.bottleneck_n = nn.BatchNorm1d(self.feat_dim)
+            self.bottleneck_n.bias.requires_grad_(False)
+            self.bottleneck_n.apply(weights_init_kaiming)
+
+            self.classifier_t = nn.Linear(self.feat_dim, self.num_classes, bias=False)
+            self.classifier_t.apply(weights_init_classifier)
+            self.bottleneck_t = nn.BatchNorm1d(self.feat_dim)
+            self.bottleneck_t.bias.requires_grad_(False)
+            self.bottleneck_t.apply(weights_init_kaiming)
         else:
             self.classifier_r = nn.Linear(self.feat_dim, self.num_classes, bias=False)
             self.classifier_r.apply(weights_init_classifier)
@@ -122,6 +143,11 @@ class DeMo(nn.Module):
                 ori = torch.cat([RGB_global, NI_global, TI_global], dim=-1)
                 ori_global = self.bottleneck(ori)
                 ori_score = self.classifier(ori_global)
+
+                # 计算每个模态的独立 logits（IADD 需要）
+                RGB_ori_score = self.classifier_r(self.bottleneck_r(RGB_global))
+                NI_ori_score = self.classifier_n(self.bottleneck_n(NI_global))
+                TI_ori_score = self.classifier_t(self.bottleneck_t(TI_global))
             else:
                 RGB_ori_score = self.classifier_r(self.bottleneck_r(RGB_global))
                 NI_ori_score = self.classifier_n(self.bottleneck_n(NI_global))
@@ -137,12 +163,16 @@ class DeMo(nn.Module):
                         'ori_feat': ori, 
                         'loss_moe': loss_moe,
                         # IADD 需要的中间特征
-                        'feats_dict': {'RGB': RGB_global, 'NI': NI_global, 'TI': TI_global}
+                        'feats_dict': {'RGB': RGB_global, 'NI': NI_global, 'TI': TI_global},
+                        # DIRECT 模式下也返回每个模态的独立 logits，符合 IADD 设计理念
+                        'logits_dict': {'RGB': RGB_ori_score, 'NI': NI_ori_score, 'TI': TI_ori_score}
                     }
                 return {
                     'ori_score': ori_score, 
                     'ori_feat': ori,
-                    'feats_dict': {'RGB': RGB_global, 'NI': NI_global, 'TI': TI_global}
+                    'feats_dict': {'RGB': RGB_global, 'NI': NI_global, 'TI': TI_global},
+                    # DIRECT 模式下也返回每个模态的独立 logits，符合 IADD 设计理念
+                    'logits_dict': {'RGB': RGB_ori_score, 'NI': NI_ori_score, 'TI': TI_ori_score}
                 }
             else:
                 if self.HDM or self.ATM:

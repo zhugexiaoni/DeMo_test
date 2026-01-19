@@ -190,6 +190,12 @@ _C.OUTPUT_DIR = "./test"
 _C.MODEL.IADD = CN()
 _C.MODEL.IADD.ENABLED = False
 _C.MODEL.IADD.TEMPERATURE = 2.0  # Sigmoid 温度
-_C.MODEL.IADD.HARD_NEG_K = 10    # MCD 计算用的 Top-K
+_C.MODEL.IADD.HARD_NEG_K = 4    # MCD 计算用的 Top-K (Reduced to be safer with small batches)
 _C.MODEL.IADD.LAMBDA_DISTILL = 0.5  # 蒸馏 Loss 权重
 _C.MODEL.IADD.LAMBDA_HYBRID = 1.0   # 混合 Triplet Loss 权重
+
+# ---------------------------------------------------------------------------- #
+# E-MDAI Options (Entropy-Guided Modality Decoupling & Alignment Intervention)
+# ---------------------------------------------------------------------------- #
+_C.MODEL.EMDAI = CN()
+_C.MODEL.EMDAI.THRESHOLD = 0.4  # 干预触发的熵阈值

@@ -93,7 +93,6 @@ def do_train_iadd(cfg,
 
             with amp.autocast(enabled=True):
                 # 假设模型返回字典，包含了 IADD 需要的组件
-                # 注意：这里需要确保模型输出包含 'logits_dict' 和 'feats_dict'
                 output = model(img, label=target, cam_label=target_cam, view_label=target_view)
                 
                 loss_total = 0
@@ -117,13 +116,31 @@ def do_train_iadd(cfg,
                     loss_total += loss_base
                     
                     # --- IADD 插件逻辑 ---
+                    if use_iadd:
+                        # 防御式检查：如果缺少 IADD 所需字段，直接给出明确提示
+                        if 'logits_dict' not in output or 'feats_dict' not in output:
+                            logger.warning(
+                                "IADD 已启用，但模型输出缺少 logits_dict 或 feats_dict，已跳过 IADD。"
+                                "（常见原因：MODEL.DIRECT=1 时未返回 logits_dict）\n"
+                                f"当前输出 keys={list(output.keys())}"
+                            )
+                        
                     if use_iadd and 'logits_dict' in output and 'feats_dict' in output:
                         # 提取特征和Logits
-                        # 假设我们对比 RGB 和 IR (这里取 NI 作为示例，实际可根据配置调整)
                         rgb_logits = output['logits_dict']['RGB']
-                        ir_logits = output['logits_dict']['NI'] # 或 TI，或两者平均
                         rgb_feats = output['feats_dict']['RGB']
-                        ir_feats = output['feats_dict']['NI']
+                        
+                        # --- 三模态融合逻辑 ---
+                        # 将 NI 和 TI 视为广义的 IR 模态
+                        ni_logits = output['logits_dict']['NI']
+                        ti_logits = output['logits_dict']['TI']
+                        ni_feats = output['feats_dict']['NI']
+                        ti_feats = output['feats_dict']['TI']
+                        
+                        # 简单的平均融合
+                        ir_logits = (ni_logits + ti_logits) / 2
+                        ir_feats = (ni_feats + ti_feats) / 2
+                        # ---------------------
                         
                         iadd_out = iadd_plugin(
                             rgb_logits, ir_logits,
@@ -210,7 +227,6 @@ def do_train_iadd(cfg,
                 logger.info("Best mAP: {:.1%}, Rank-1: {:.1%}".format(best_index['mAP'], best_index['Rank-1']))
 
 def training_neat_eval(cfg, model, val_loader, device, evaluator, epoch, logger, return_pattern=1):
-    # 复用 processor_dmcg.py 中的实现，或此处重新实现
-    # 为简洁，此处省略具体实现，假设已有
-    from engine.processor_dmcg import training_neat_eval as eval_func
+    # 复用 processor.py 中的实现
+    from engine.processor import training_neat_eval as eval_func
     return eval_func(cfg, model, val_loader, device, evaluator, epoch, logger, return_pattern)
