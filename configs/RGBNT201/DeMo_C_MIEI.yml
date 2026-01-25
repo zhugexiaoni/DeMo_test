@@ -2,7 +2,7 @@ MODEL:
   TRANSFORMER_TYPE: 'ViT-B-16'
   STRIDE_SIZE: [ 16, 16 ]
   SIE_CAMERA: True
-  DIRECT: 1  # E-MDAI 必须在 DIRECT 模式下工作（使用独立 Logits 熵）
+  DIRECT: 1
   SIE_COE: 1.0
   ID_LOSS_WEIGHT: 0.25
   TRIPLET_LOSS_WEIGHT: 1.0
@@ -11,17 +11,14 @@ MODEL:
   ATM: True
   HEAD: 4
 
-  # IADD配置 (作为基础蒸馏组件)
-  IADD:
+  # C-MIEI (Counterfactual Modality Influence Equalization)
+  # Method: feature substitution (prototype + noise) triggered by counterfactual KL influence
+  C_MIEI:
     ENABLED: True
-    TEMPERATURE: 2.0
-    HARD_NEG_K: 4
-    LAMBDA_DISTILL: 0.5
-    LAMBDA_HYBRID: 1.0
-
-  # E-MDAI配置 (作为特征空间几何干预组件)
-  EMDAI:
-    THRESHOLD: 0.8  # 提高阈值以确保干预触发 (之前 0.4 太低导致 Interv_Ratio=0)
+    K: 3
+    SIGMA: 0.05
+    ABS_THR: 0.03
+    REL_THR: 1.25
 
 INPUT:
   SIZE_TRAIN: [ 256, 128 ]
@@ -55,4 +52,4 @@ TEST:
   FEAT_NORM: 'yes'
   MISS: "nothing"
 
-OUTPUT_DIR: 'output/EMDAI/RGBNT201'
+OUTPUT_DIR: 'output/C_MIEI/RGBNT201'

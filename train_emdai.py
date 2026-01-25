@@ -85,11 +85,7 @@ def main():
     if args.config_file != "":
         cfg.merge_from_file(args.config_file)
     cfg.merge_from_list(args.opts)
-    
-    # 强制开启 IADD (如果需要 E-MDAI 和 IADD 配合使用)
-    # 或者你可以仅使用 E-MDAI
-    # cfg.MODEL.IADD.ENABLED = True 
-    
+
     # 确保 DIRECT=1 模式 (这是 E-MDAI 典型使用场景)
     # cfg.MODEL.DIRECT = True
     

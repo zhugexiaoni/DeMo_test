@@ -198,4 +198,16 @@ _C.MODEL.IADD.LAMBDA_HYBRID = 1.0   # 混合 Triplet Loss 权重
 # E-MDAI Options (Entropy-Guided Modality Decoupling & Alignment Intervention)
 # ---------------------------------------------------------------------------- #
 _C.MODEL.EMDAI = CN()
-_C.MODEL.EMDAI.THRESHOLD = 0.4  # 干预触发的熵阈值
+_C.MODEL.EMDAI.ENABLED = False
+
+_C.MODEL.EMDAI.THRESHOLD = 0.8  # 干预触发的熵阈值
+
+# ---------------------------------------------------------------------------- #
+# C-MIEI Options (Counterfactual Modality Influence Equalization)
+# ---------------------------------------------------------------------------- #
+_C.MODEL.C_MIEI = CN()
+_C.MODEL.C_MIEI.ENABLED = False
+_C.MODEL.C_MIEI.K = 3          # estimate CI every K steps
+_C.MODEL.C_MIEI.SIGMA = 0.05   # substitution noise scale
+_C.MODEL.C_MIEI.ABS_THR = 0.03 # absolute KL threshold
+_C.MODEL.C_MIEI.REL_THR = 1.25 # relative dominance threshold

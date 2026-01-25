@@ -451,7 +451,7 @@ class VisionTransformer(nn.Module):
             [self.class_embedding.to(x.dtype) + torch.zeros(x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device),
              x], dim=1)  # shape = [*, grid ** 2 + 1, width]
         if cv_emb != None:
-            x[:, 0] = x[:, 0] + cv_emb.squeeze(1)
+            x[:, 0] = x[:, 0] + cv_emb.squeeze(1).to(x.device)
         x = x + self.positional_embedding.to(x.dtype)
 
         x = self.ln_pre(x)
