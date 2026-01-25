@@ -1,12 +1,11 @@
 from utils.logger import setup_logger
 from data import make_dataloader
-from importlib import import_module
 
-make_model = import_module('modeling.make_model_{C_MIEI}').make_model
+from modeling.make_model_cmiei import make_model
 from solver.make_optimizer import make_optimizer
 from solver.scheduler_factory import create_scheduler
 from layers.make_loss import make_loss
-do_train_cmiei = import_module('engine.processor_{C_MIEI}').do_train_cmiei
+from engine.processor_cmiei import do_train_cmiei
 import random
 import torch
 import numpy as np

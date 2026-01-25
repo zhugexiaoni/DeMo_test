@@ -211,3 +211,6 @@ _C.MODEL.C_MIEI.K = 3          # estimate CI every K steps
 _C.MODEL.C_MIEI.SIGMA = 0.05   # substitution noise scale
 _C.MODEL.C_MIEI.ABS_THR = 0.03 # absolute KL threshold
 _C.MODEL.C_MIEI.REL_THR = 1.25 # relative dominance threshold
+_C.MODEL.C_MIEI.SAMPLE_LEVEL = False  # per-sample intervention
+_C.MODEL.C_MIEI.P_MAX = 0.5           # cap max intervened samples ratio per intervention step
+_C.MODEL.C_MIEI.WARMUP_EPOCHS = 5     # only collect CI during warmup, no intervention

@@ -20,6 +20,10 @@ MODEL:
     ABS_THR: 0.03
     REL_THR: 1.25
 
+    SAMPLE_LEVEL: True
+    P_MAX: 0.5
+    WARMUP_EPOCHS: 5
+
 INPUT:
   SIZE_TRAIN: [ 256, 128 ]
   SIZE_TEST: [ 256, 128 ]

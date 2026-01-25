@@ -7,7 +7,7 @@ DeMo + DMCG Integration
 
 import torch
 import torch.nn as nn
-from modeling.make_model import DeMo
+from DeMo_test.modeling.make_model_emdai import DeMo
 from modeling.dmcg_module import DMCGModule, gate_regularization_loss, balance_promotion_loss
 from modeling.miei_calculator import MEIECalculator
 from modeling.meta_arch import weights_init_classifier, weights_init_kaiming
@@ -311,7 +311,7 @@ class DeMo_DMCG(nn.Module):
 
 def make_model_dmcg(cfg, num_class, camera_num, view_num=0):
     """构建DeMo+DMCG模型的工厂函数"""
-    from modeling.make_model import __factory_T_type
+    from DeMo_test.modeling.make_model_emdai import __factory_T_type
     model = DeMo_DMCG(num_class, cfg, camera_num, view_num, __factory_T_type)
     print('===========Building DeMo + DMCG===========')
     print(f'DMCG Enabled: {cfg.MODEL.DMCG.ENABLED}')

@@ -171,7 +171,18 @@ class DeMo(nn.Module):
                         sigma = float(getattr(self.cfg.MODEL.C_MIEI, 'SIGMA', 0.05))
                         abs_thr = float(getattr(self.cfg.MODEL.C_MIEI, 'ABS_THR', 0.03))
                         rel_thr = float(getattr(self.cfg.MODEL.C_MIEI, 'REL_THR', 1.25))
-                        self._cmiei = CounterfactualSubstitutePlugin(k=k, sigma=sigma, abs_thr=abs_thr, rel_thr=rel_thr)
+                        sample_level = bool(getattr(self.cfg.MODEL.C_MIEI, 'SAMPLE_LEVEL', False))
+                        p_max = float(getattr(self.cfg.MODEL.C_MIEI, 'P_MAX', 0.5))
+                        warmup_epochs = int(getattr(self.cfg.MODEL.C_MIEI, 'WARMUP_EPOCHS', 5))
+                        self._cmiei = CounterfactualSubstitutePlugin(
+                            k=k,
+                            sigma=sigma,
+                            abs_thr=abs_thr,
+                            rel_thr=rel_thr,
+                            sample_level=sample_level,
+                            p_max=p_max,
+                            warmup_epochs=warmup_epochs,
+                        )
 
                     RGB_global, NI_global, TI_global, stats = self._cmiei(
                         RGB_global,

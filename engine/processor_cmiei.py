@@ -49,10 +49,13 @@ def do_train_cmiei(cfg,
     acc_meter = AverageMeter()
 
     # C-MIEI meters
-    cmiei_ratio_meter = AverageMeter()
+    cmiei_ratio_meter = AverageMeter()  # sample-level: ratio of intervened samples (avg over logs)
     cmiei_ci_r_meter = AverageMeter()
     cmiei_ci_n_meter = AverageMeter()
     cmiei_ci_t_meter = AverageMeter()
+    cmiei_hist_r_meter = AverageMeter()
+    cmiei_hist_n_meter = AverageMeter()
+    cmiei_hist_t_meter = AverageMeter()
 
     if cfg.DATASETS.NAMES == "MSVR310":
         evaluator = R1_mAP(num_query, max_rank=50, feat_norm=cfg.TEST.FEAT_NORM)
@@ -65,6 +68,15 @@ def do_train_cmiei(cfg,
     best_index = {'mAP': 0, "Rank-1": 0, 'Rank-5': 0, 'Rank-10': 0}
 
     for epoch in range(1, epochs + 1):
+
+        # set epoch for C-MIEI warmup (if plugin exists)
+        m = model.module if hasattr(model, 'module') else model
+        if hasattr(m, '_cmiei') and getattr(m, '_cmiei') is not None:
+            try:
+                m._cmiei.set_epoch(epoch)
+            except Exception:
+                pass
+
         start_time = time.time()
         loss_meter.reset()
         acc_meter.reset()
@@ -72,6 +84,9 @@ def do_train_cmiei(cfg,
         cmiei_ci_r_meter.reset()
         cmiei_ci_n_meter.reset()
         cmiei_ci_t_meter.reset()
+        cmiei_hist_r_meter.reset()
+        cmiei_hist_n_meter.reset()
+        cmiei_hist_t_meter.reset()
 
         scheduler.step(epoch)
         model.train()
@@ -124,30 +139,43 @@ def do_train_cmiei(cfg,
                 stats = getattr(m, '_cmiei_stats')
 
             if isinstance(stats, dict):
-                cmiei_ratio_meter.update(1.0 if stats.get('cmiei_intervened', False) else 0.0, 1)
+                # new sample-level stats keys
+                cmiei_ratio_meter.update(float(stats.get('cmiei_ratio', 0.0)), 1)
                 cmiei_ci_r_meter.update(float(stats.get('cmiei_ci_r', 0.0)), 1)
                 cmiei_ci_n_meter.update(float(stats.get('cmiei_ci_n', 0.0)), 1)
                 cmiei_ci_t_meter.update(float(stats.get('cmiei_ci_t', 0.0)), 1)
+                cmiei_hist_r_meter.update(float(stats.get('cmiei_hist_r', 0.0)), 1)
+                cmiei_hist_n_meter.update(float(stats.get('cmiei_hist_n', 0.0)), 1)
+                cmiei_hist_t_meter.update(float(stats.get('cmiei_hist_t', 0.0)), 1)
             else:
                 cmiei_ratio_meter.update(0.0, 1)
                 cmiei_ci_r_meter.update(0.0, 1)
                 cmiei_ci_n_meter.update(0.0, 1)
                 cmiei_ci_t_meter.update(0.0, 1)
+                cmiei_hist_r_meter.update(0.0, 1)
+                cmiei_hist_n_meter.update(0.0, 1)
+                cmiei_hist_t_meter.update(0.0, 1)
 
             torch.cuda.synchronize()
             if (n_iter + 1) % log_period == 0:
                 logger.info(
                     "Epoch[{}] Iteration[{}/{}] Loss: {:.3f}, Acc: {:.3f}, "
-                    "C_MIEI_Ratio: {:.3f}, CI_r: {:.4f}, CI_n: {:.4f}, CI_t: {:.4f}, Base Lr: {:.2e}"
+                    "C_MIEI_Ratio: {:.3f}, CI_r: {:.4f}, CI_n: {:.4f}, CI_t: {:.4f}, "
+                    "Hist[r,n,t]=[{:.2f},{:.2f},{:.2f}], Base Lr: {:.2e}"
                     .format(epoch, (n_iter + 1), len(train_loader),
                             loss_meter.avg, acc_meter.avg,
                             cmiei_ratio_meter.avg,
                             cmiei_ci_r_meter.avg, cmiei_ci_n_meter.avg, cmiei_ci_t_meter.avg,
+                            cmiei_hist_r_meter.avg, cmiei_hist_n_meter.avg, cmiei_hist_t_meter.avg,
                             scheduler._get_lr(epoch)[0])
                 )
 
                 if isinstance(stats, dict) and (dist.get_rank() == 0 if cfg.MODEL.DIST_TRAIN else True):
-                    logger.info(f"[C-MIEI] chosen={stats.get('cmiei_chosen', None)} intervened={stats.get('cmiei_intervened', None)} step={stats.get('cmiei_step', None)}")
+                    logger.info(
+                        f"[C-MIEI] epoch={stats.get('cmiei_epoch', None)} step={stats.get('cmiei_step', None)} "
+                        f"sample_level={stats.get('cmiei_sample_level', None)} ratio={stats.get('cmiei_ratio', None)} "
+                        f"chosen={stats.get('cmiei_chosen', None)} p_max={stats.get('cmiei_p_max', None)} warmup={stats.get('cmiei_warmup_epochs', None)}"
+                    )
 
         end_time = time.time()
         time_per_batch = (end_time - start_time) / (n_iter + 1)

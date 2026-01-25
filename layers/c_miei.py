@@ -1,6 +1,4 @@
-import math
-from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
+from typing import Dict, Tuple
 
 import torch
 import torch.nn as nn
@@ -19,37 +17,25 @@ def _kl_pq_from_logits(logits_p: torch.Tensor, logits_q: torch.Tensor) -> torch.
     log_p = torch.log_softmax(logits_p, dim=1)
     log_q = torch.log_softmax(logits_q, dim=1)
     p = log_p.exp()
-    kl = (p * (log_p - log_q)).sum(dim=1)
-    return kl
-
-
-@dataclass
-class CMIEIStats:
-    step: int
-    k: int
-    sigma: float
-    abs_thr: float
-    rel_thr: float
-    intervened: bool
-    chosen: str
-    ci_r: float
-    ci_n: float
-    ci_t: float
+    return (p * (log_p - log_q)).sum(dim=1)
 
 
 class CounterfactualSubstitutePlugin(nn.Module):
     """C-MIEI: Counterfactual influence -> feature substitution intervention.
 
-    This is a *feature-level* intervention (not gradient scaling):
+    Supports:
+    - batch-level intervention (previous behavior)
+    - sample-level intervention with cap p_max and warmup_epochs
+
+    This is *feature-level* intervention (not gradient scaling):
     - Estimate per-modality counterfactual influence CI via KL divergence between
       normal fused logits and logits when dropping one modality feature.
-    - If one modality dominates (CI large and relatively larger), substitute
-      that modality feature with batch-prototype + small noise.
+    - If one modality dominates, substitute that modality feature with
+      batch-prototype + small noise.
 
-    Notes:
-    - Designed to avoid extra modality-specific classifier heads.
-    - Only requires access to the fused head (bottleneck+classifier) to compute logits.
-    - Does NOT modify the head; it only intervenes on modality features.
+    Implementation notes:
+    - No extra modality classifier head required.
+    - Only needs access to fused head callable fused_logits_fn(fr, fn, ft)->logits.
     """
 
     def __init__(
@@ -58,6 +44,9 @@ class CounterfactualSubstitutePlugin(nn.Module):
         sigma: float = 0.05,
         abs_thr: float = 0.03,
         rel_thr: float = 1.25,
+        sample_level: bool = False,
+        p_max: float = 0.5,
+        warmup_epochs: int = 5,
         drop_mode: str = 'zero',
         eps: float = 1e-12,
     ):
@@ -65,56 +54,78 @@ class CounterfactualSubstitutePlugin(nn.Module):
         assert k >= 1
         assert sigma >= 0
         assert drop_mode in {'zero', 'mean'}
+        assert 0.0 < p_max <= 1.0
+        assert warmup_epochs >= 0
+
         self.k = int(k)
         self.sigma = float(sigma)
         self.abs_thr = float(abs_thr)
         self.rel_thr = float(rel_thr)
+        self.sample_level = bool(sample_level)
+        self.p_max = float(p_max)
+        self.warmup_epochs = int(warmup_epochs)
         self.drop_mode = drop_mode
         self.eps = float(eps)
 
         self._step = 0
-        self._last_ci = {'r': 0.0, 'n': 0.0, 't': 0.0}
-        self._last_choice = 'none'
-        self._last_intervened = False
+        self._epoch = 0
+
+        # last cached stats (for logging when not estimating)
+        self._last_ci_mean = {'r': 0.0, 'n': 0.0, 't': 0.0}
+        self._last_ratio = 0.0
+        self._last_chosen = 'none'
+        self._last_hist = {'r': 0.0, 'n': 0.0, 't': 0.0}
+
+    def set_epoch(self, epoch: int):
+        self._epoch = int(epoch)
 
     @staticmethod
     def _substitute(feat: torch.Tensor, sigma: float) -> torch.Tensor:
-        # feat: [B, D]
-        mu = feat.mean(dim=0, keepdim=True)  # [1, D]
+        """Substitute by batch prototype + noise."""
+        mu = feat.mean(dim=0, keepdim=True)
         if sigma <= 0:
             return mu.expand_as(feat)
-        noise = torch.randn_like(feat) * sigma
-        return mu.expand_as(feat) + noise
+        return mu.expand_as(feat) + torch.randn_like(feat) * sigma
 
     def _drop(self, feat: torch.Tensor) -> torch.Tensor:
         if self.drop_mode == 'zero':
             return torch.zeros_like(feat)
-        # mean drop: replace by batch prototype (no noise) to reduce info but keep scale
         return feat.mean(dim=0, keepdim=True).expand_as(feat)
 
     @torch.no_grad()
-    def _estimate_ci(
+    def _estimate_ci_per_sample(
         self,
         fr: torch.Tensor,
         fn: torch.Tensor,
         ft: torch.Tensor,
         fused_logits_fn,
-    ) -> Tuple[float, float, float]:
-        """Estimate CI for each modality with no backbone recomputation.
-
-        fused_logits_fn should be a callable that maps (fr, fn, ft) -> logits [B, C]
-        using the *same* head as training.
-        """
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Return per-sample CI for each modality: (ci_r, ci_n, ci_t) each [B]."""
         z = fused_logits_fn(fr, fn, ft)
-
         z_r = fused_logits_fn(self._drop(fr), fn, ft)
         z_n = fused_logits_fn(fr, self._drop(fn), ft)
         z_t = fused_logits_fn(fr, fn, self._drop(ft))
+        return _kl_pq_from_logits(z, z_r), _kl_pq_from_logits(z, z_n), _kl_pq_from_logits(z, z_t)
 
-        ci_r = float(_kl_pq_from_logits(z, z_r).mean().item())
-        ci_n = float(_kl_pq_from_logits(z, z_n).mean().item())
-        ci_t = float(_kl_pq_from_logits(z, z_t).mean().item())
-        return ci_r, ci_n, ci_t
+    @torch.no_grad()
+    def _choose_and_mask(self, ci_stack: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Choose dominant modality per sample and return chosen_idx and mask.
+
+        Args:
+            ci_stack: [B, 3] (r,n,t)
+
+        Returns:
+            chosen_idx: [B] in {0,1,2}
+            intervene_mask: [B] bool
+        """
+        # top2 per sample
+        top2_vals, top2_idx = torch.topk(ci_stack, k=2, dim=1, largest=True, sorted=True)
+        v1 = top2_vals[:, 0]
+        v2 = top2_vals[:, 1]
+        chosen_idx = top2_idx[:, 0]
+
+        cond = (v1 > self.abs_thr) & (v1 / (v2 + self.eps) > self.rel_thr)
+        return chosen_idx, cond
 
     def forward(
         self,
@@ -124,59 +135,127 @@ class CounterfactualSubstitutePlugin(nn.Module):
         fused_logits_fn,
         enable: bool = True,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict]:
-        """Apply C-MIEI substitution if triggered.
-
-        Args:
-            fr/fn/ft: modality global features [B, D]
-            fused_logits_fn: callable(fr, fn, ft) -> fused logits [B, C]
-            enable: master switch
-
-        Returns:
-            fr2, fn2, ft2, stats_dict
-        """
         self._step += 1
-        chosen = 'none'
-        intervened = False
 
-        # periodic CI estimation
-        if enable and (self._step % self.k == 0):
-            ci_r, ci_n, ci_t = self._estimate_ci(fr, fn, ft, fused_logits_fn)
-            self._last_ci = {'r': ci_r, 'n': ci_n, 't': ci_t}
+        # default: reuse cached numbers
+        ci_r_mean, ci_n_mean, ci_t_mean = (
+            self._last_ci_mean['r'],
+            self._last_ci_mean['n'],
+            self._last_ci_mean['t'],
+        )
+        ratio = self._last_ratio
+        chosen = self._last_chosen
+        hist = dict(self._last_hist)
 
-            cis = {'r': ci_r, 'n': ci_n, 't': ci_t}
-            # choose max and second max
-            sorted_items = sorted(cis.items(), key=lambda kv: kv[1], reverse=True)
-            (m1, v1), (m2, v2) = sorted_items[0], sorted_items[1]
+        # only estimate every k steps
+        do_estimate = enable and (self._step % self.k == 0)
 
-            if (v1 > self.abs_thr) and (v1 / (v2 + self.eps) > self.rel_thr):
-                chosen = m1
-        else:
-            # reuse last decision only for logging, not for action
-            ci_r, ci_n, ci_t = self._last_ci['r'], self._last_ci['n'], self._last_ci['t']
+        if do_estimate:
+            ci_r, ci_n, ci_t = self._estimate_ci_per_sample(fr, fn, ft, fused_logits_fn)
+            ci_stack = torch.stack([ci_r, ci_n, ci_t], dim=1)  # [B,3]
 
-        # intervene (substitute) only on CI estimation steps to keep behavior predictable
-        if enable and (self._step % self.k == 0) and chosen in {'r', 'n', 't'}:
-            intervened = True
-            if chosen == 'r':
-                fr = self._substitute(fr, self.sigma)
-            elif chosen == 'n':
-                fn = self._substitute(fn, self.sigma)
+            ci_r_mean = float(ci_r.mean().item())
+            ci_n_mean = float(ci_n.mean().item())
+            ci_t_mean = float(ci_t.mean().item())
+            self._last_ci_mean = {'r': ci_r_mean, 'n': ci_n_mean, 't': ci_t_mean}
+
+            if not self.sample_level:
+                # batch-level choose
+                cis = {'r': ci_r_mean, 'n': ci_n_mean, 't': ci_t_mean}
+                sorted_items = sorted(cis.items(), key=lambda kv: kv[1], reverse=True)
+                (m1, v1), (m2, v2) = sorted_items[0], sorted_items[1]
+                chosen = 'none'
+                if (v1 > self.abs_thr) and (v1 / (v2 + self.eps) > self.rel_thr):
+                    chosen = m1
+
+                intervened = False
+                if enable and (self._epoch >= self.warmup_epochs) and chosen in {'r', 'n', 't'}:
+                    intervened = True
+                    if chosen == 'r':
+                        fr = self._substitute(fr, self.sigma)
+                    elif chosen == 'n':
+                        fn = self._substitute(fn, self.sigma)
+                    else:
+                        ft = self._substitute(ft, self.sigma)
+
+                ratio = 1.0 if intervened else 0.0
+                hist = {'r': 1.0 if chosen == 'r' else 0.0,
+                        'n': 1.0 if chosen == 'n' else 0.0,
+                        't': 1.0 if chosen == 't' else 0.0}
+
             else:
-                ft = self._substitute(ft, self.sigma)
+                # sample-level choose + cap
+                chosen_idx, mask = self._choose_and_mask(ci_stack)
 
-        self._last_choice = chosen
-        self._last_intervened = intervened
+                # cap to top p_max by dominant CI value
+                B = ci_stack.size(0)
+                cap = max(1, int(round(self.p_max * B)))
+                dom_val = ci_stack.gather(1, chosen_idx.view(-1, 1)).squeeze(1)  # [B]
+
+                # keep only masked samples, then take top-k by dom_val
+                valid_idx = torch.nonzero(mask, as_tuple=False).view(-1)
+                if valid_idx.numel() > cap:
+                    # select top cap among valid
+                    topk = torch.topk(dom_val[valid_idx], k=cap, largest=True).indices
+                    keep_idx = valid_idx[topk]
+                    new_mask = torch.zeros_like(mask)
+                    new_mask[keep_idx] = True
+                    mask = new_mask
+
+                # apply only after warmup
+                if enable and (self._epoch >= self.warmup_epochs) and mask.any():
+                    # modality masks
+                    mask_r = mask & (chosen_idx == 0)
+                    mask_n = mask & (chosen_idx == 1)
+                    mask_t = mask & (chosen_idx == 2)
+
+                    if mask_r.any():
+                        fr = fr.clone()
+                        fr[mask_r] = self._substitute(fr[mask_r], self.sigma)
+                    if mask_n.any():
+                        fn = fn.clone()
+                        fn[mask_n] = self._substitute(fn[mask_n], self.sigma)
+                    if mask_t.any():
+                        ft = ft.clone()
+                        ft[mask_t] = self._substitute(ft[mask_t], self.sigma)
+
+                ratio = float(mask.float().mean().item())
+
+                # chosen histogram (over all samples, not only masked)
+                hist = {
+                    'r': float((chosen_idx == 0).float().mean().item()),
+                    'n': float((chosen_idx == 1).float().mean().item()),
+                    't': float((chosen_idx == 2).float().mean().item()),
+                }
+
+                # for logging: the most frequent chosen
+                chosen = ['r', 'n', 't'][int(torch.bincount(chosen_idx, minlength=3).argmax().item())]
+
+            self._last_ratio = ratio
+            self._last_chosen = chosen
+            self._last_hist = dict(hist)
 
         stats = {
             'cmiei_step': int(self._step),
+            'cmiei_epoch': int(self._epoch),
             'cmiei_k': int(self.k),
             'cmiei_sigma': float(self.sigma),
             'cmiei_abs_thr': float(self.abs_thr),
             'cmiei_rel_thr': float(self.rel_thr),
-            'cmiei_intervened': bool(intervened),
+            'cmiei_sample_level': bool(self.sample_level),
+            'cmiei_p_max': float(self.p_max),
+            'cmiei_warmup_epochs': int(self.warmup_epochs),
+
+            # main stats
+            'cmiei_ratio': float(ratio),
             'cmiei_chosen': str(chosen),
-            'cmiei_ci_r': float(ci_r),
-            'cmiei_ci_n': float(ci_n),
-            'cmiei_ci_t': float(ci_t),
+            'cmiei_ci_r': float(ci_r_mean),
+            'cmiei_ci_n': float(ci_n_mean),
+            'cmiei_ci_t': float(ci_t_mean),
+
+            # histogram over chosen modality (sample-level; still filled for batch-level)
+            'cmiei_hist_r': float(hist.get('r', 0.0)),
+            'cmiei_hist_n': float(hist.get('n', 0.0)),
+            'cmiei_hist_t': float(hist.get('t', 0.0)),
         }
         return fr, fn, ft, stats
